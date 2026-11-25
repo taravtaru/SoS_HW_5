@@ -1,0 +1,200 @@
+x-kafka-env: &kafka-env
+  CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+  KAFKA_PROCESS_ROLES: broker,controller
+  KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
+  KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+  KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+  KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+  KAFKA_LOG_DIRS: /var/lib/kafka/data
+  KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+  KAFKA_DEFAULT_REPLICATION_FACTOR: 2
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
+  KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+  KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+  KAFKA_HEAP_OPTS: -Xms192m -Xmx384m
+
+x-healthcheck: &healthcheck
+  interval: 10s
+  timeout: 5s
+  retries: 12
+  start_period: 30s
+
+x-kafka: &kafka
+  image: apache/kafka:3.9.1
+  restart: unless-stopped
+  healthcheck:
+    <<: *healthcheck
+    test: ["CMD-SHELL", "KAFKA_HEAP_OPTS='-Xms64m -Xmx128m' /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null"]
+    timeout: 10s
+    interval: 20s
+
+x-kafka-client-env: &kafka-client-env
+  KAFKA_BOOTSTRAP_SERVERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
+  SCHEMA_REGISTRY_URL: http://schema-registry:8081
+
+x-clickhouse-env: &clickhouse-env
+  CLICKHOUSE_USER: cinema
+  CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-cinema-clickhouse}
+  CLICKHOUSE_DB: cinema
+
+x-postgres-env: &postgres-env
+  POSTGRES_USER: cinema
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cinema-postgres}
+  POSTGRES_DB: cinema
+
+x-s3-env: &s3-env
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-cinema}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-cinema-storage}
+
+x-python: &python
+  build: .
+  init: true
+  restart: unless-stopped
+
+services:
+  kafka-1:
+    <<: *kafka
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: 1
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-1:9092
+    volumes:
+      - kafka-1:/var/lib/kafka/data
+
+  kafka-2:
+    <<: *kafka
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: 2
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:9092
+    volumes:
+      - kafka-2:/var/lib/kafka/data
+
+  kafka-3:
+    <<: *kafka
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: 3
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-3:9092
+    volumes:
+      - kafka-3:/var/lib/kafka/data
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.9.10
+    restart: unless-stopped
+    depends_on:
+      kafka-1: {condition: service_healthy}
+      kafka-2: {condition: service_healthy}
+      kafka-3: {condition: service_healthy}
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
+      SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR: 2
+      SCHEMA_REGISTRY_HEAP_OPTS: -Xms128m -Xmx384m
+    ports:
+      - "127.0.0.1:${REGISTRY_PORT:-8081}:8081"
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/subjects"]
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    restart: unless-stopped
+    environment:
+      <<: *clickhouse-env
+      CLICKHOUSE_ALWAYS_RUN_INITDB_SCRIPTS: "1"
+    volumes:
+      - clickhouse:/var/lib/clickhouse
+      - ./infra/clickhouse/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+      - ./infra/clickhouse/grafana-users.xml:/etc/clickhouse-server/users.d/grafana-users.xml:ro
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "clickhouse-client --host clickhouse --user \"$$CLICKHOUSE_USER\" --password \"$$CLICKHOUSE_PASSWORD\" --query 'SELECT 1 FROM cinema.daily_snapshots LIMIT 1'"]
+
+  postgres:
+    image: postgres:17.6-alpine
+    restart: unless-stopped
+    environment: *postgres-env
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+
+  s3:
+    image: chrislusf/seaweedfs:4.55
+    command: ["mini", "-dir=/data", "-ip.bind=0.0.0.0"]
+    restart: unless-stopped
+    environment:
+      <<: *s3-env
+      S3_BUCKET: movie-analytics
+    volumes:
+      - s3:/data
+    ports:
+      - "127.0.0.1:${S3_PORT:-8333}:8333"
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8333/healthz"]
+
+  producer:
+    <<: *python
+    command: uvicorn app.producer:app --host 0.0.0.0 --port 8000
+    depends_on:
+      schema-registry: {condition: service_healthy}
+    environment:
+      <<: *kafka-client-env
+      GENERATOR_INTERVAL_SECONDS: ${GENERATOR_INTERVAL_SECONDS:-3}
+    ports:
+      - "127.0.0.1:${PRODUCER_PORT:-8000}:8000"
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+
+  aggregation:
+    <<: *python
+    command: uvicorn app.aggregation:app --host 0.0.0.0 --port 8001
+    depends_on:
+      clickhouse: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+    environment:
+      <<: [*clickhouse-env, *postgres-env, *s3-env]
+      AGGREGATION_INTERVAL_SECONDS: ${AGGREGATION_INTERVAL_SECONDS:-60}
+    ports:
+      - "127.0.0.1:${AGGREGATION_PORT:-8001}:8001"
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8001/health', timeout=4)"]
+
+  grafana:
+    image: grafana/grafana:11.6.5
+    restart: unless-stopped
+    depends_on:
+      clickhouse: {condition: service_healthy}
+    environment:
+      GF_PLUGINS_PREINSTALL: grafana-clickhouse-datasource@4.11.2
+      GF_PLUGINS_PREINSTALL_ASYNC: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: light
+    volumes:
+      - grafana:/var/lib/grafana
+      - ./infra/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./infra/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/health"]
+
+volumes:
+  kafka-1:
+  kafka-2:
+  kafka-3:
+  clickhouse:
+  postgres:
+  s3:
+  grafana:

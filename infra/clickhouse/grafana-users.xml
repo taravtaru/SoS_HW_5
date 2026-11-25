@@ -1,0 +1,17 @@
+<clickhouse>
+    <profiles>
+        <grafana_reader>
+            <readonly>2</readonly>
+        </grafana_reader>
+    </profiles>
+    <users>
+        <grafana>
+            <password>cinema-grafana</password>
+            <networks><ip>::/0</ip></networks>
+            <profile>grafana_reader</profile>
+            <grants>
+                <query>GRANT SELECT ON cinema.daily_snapshots</query>
+            </grants>
+        </grafana>
+    </users>
+</clickhouse>

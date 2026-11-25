@@ -1,0 +1,243 @@
+{
+  "uid": "cinema-analytics",
+  "title": "Online Cinema",
+  "tags": [
+    "cinema"
+  ],
+  "timezone": "utc",
+  "schemaVersion": 41,
+  "version": 1,
+  "editable": false,
+  "refresh": "30s",
+  "time": {
+    "from": "now-14d/d",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Retention Cohort Heatmap",
+      "description": "Когорты по дате первого просмотра. Возвратом считается любое действие в соответствующий день UTC.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "cinema-clickhouse"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 11
+      },
+      "options": {
+        "showHeader": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "center"
+          },
+          "noValue": "—"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Когорта"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 126
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/^Day [0-7]$/"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": null,
+                      "color": "transparent"
+                    },
+                    {
+                      "value": 0.01,
+                      "color": "#DDF5F0"
+                    },
+                    {
+                      "value": 0.2,
+                      "color": "#ACE6DC"
+                    },
+                    {
+                      "value": 0.4,
+                      "color": "#77CEC1"
+                    },
+                    {
+                      "value": 0.6,
+                      "color": "#47B1A5"
+                    },
+                    {
+                      "value": 0.8,
+                      "color": "#178479"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "cinema-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "SELECT\n    toString(metric_date) AS `Когорта`,\n    retention[1] AS `Day 0`,\n    retention[2] AS `Day 1`,\n    retention[3] AS `Day 2`,\n    retention[4] AS `Day 3`,\n    retention[5] AS `Day 4`,\n    retention[6] AS `Day 5`,\n    retention[7] AS `Day 6`,\n    retention[8] AS `Day 7`\nFROM cinema.daily_snapshots FINAL\nWHERE cohort_size > 0 AND $__dateFilter(metric_date)\nORDER BY metric_date DESC"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "DAU",
+      "description": "Уникальные пользователи за день UTC.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "cinema-clickhouse"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 11,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#147E76"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "always",
+            "pointSize": 4,
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "cinema-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "timeseries",
+          "format": 0,
+          "rawSql": "SELECT toDateTime(metric_date, 'UTC') AS time, dau AS `DAU`\nFROM cinema.daily_snapshots FINAL\nWHERE $__dateFilter(metric_date)\nORDER BY time"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Конверсия просмотра",
+      "description": "Доля завершений от числа стартов за день UTC.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "cinema-clickhouse"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 11,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#5366B7"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "always",
+            "pointSize": 4,
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "cinema-clickhouse"
+          },
+          "editorType": "sql",
+          "queryType": "timeseries",
+          "format": 0,
+          "rawSql": "SELECT toDateTime(metric_date, 'UTC') AS time, view_conversion AS `Конверсия просмотра`\nFROM cinema.daily_snapshots FINAL\nWHERE $__dateFilter(metric_date)\nORDER BY time"
+        }
+      ]
+    }
+  ]
+}
